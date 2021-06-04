@@ -287,6 +287,11 @@ configure(allprojects) { project ->
 		resolutionStrategy {
 			cacheChangingModulesFor 0, "seconds"
 		}
+		allprojects {
+			repositories {
+				maven { url 'https://maven.aliyun.com/repository/public/' }
+			}
+		}
 		repositories {
 			mavenCentral()
 			maven { url "https://repo.spring.io/libs-spring-framework-build" }
