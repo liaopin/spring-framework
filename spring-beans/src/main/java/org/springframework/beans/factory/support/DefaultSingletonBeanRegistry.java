@@ -75,12 +75,15 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 
 
 	/** Cache of singleton objects: bean name to bean instance. */
+	/**一级缓存，key是bean，value是对应单例实例对象 */
 	private final Map<String, Object> singletonObjects = new ConcurrentHashMap<>(256);
 
 	/** Cache of singleton factories: bean name to ObjectFactory. */
+	/** 三级缓存 */
 	private final Map<String, ObjectFactory<?>> singletonFactories = new HashMap<>(16);
 
 	/** Cache of early singleton objects: bean name to bean instance. */
+	/** 二级缓存 */
 	private final Map<String, Object> earlySingletonObjects = new ConcurrentHashMap<>(16);
 
 	/** Set of registered singletons, containing the bean names in registration order. */
@@ -139,6 +142,7 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 			this.singletonObjects.put(beanName, singletonObject);
 			this.singletonFactories.remove(beanName);
 			this.earlySingletonObjects.remove(beanName);
+			//已经注册过的单例实例
 			this.registeredSingletons.add(beanName);
 		}
 	}
@@ -173,15 +177,44 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 	 * <p>Checks already instantiated singletons and also allows for an early
 	 * reference to a currently created singleton (resolving a circular reference).
 	 * @param beanName the name of the bean to look for
-	 * @param allowEarlyReference whether early references should be created or not
+	 * @param allowEarlyReference whether early references should be created or not  是否允许拿到早期实例
 	 * @return the registered singleton object, or {@code null} if none found
 	 */
 	@Nullable
 	protected Object getSingleton(String beanName, boolean allowEarlyReference) {
 		// Quick check for existing instance without full singleton lock
+		//到一级缓存中获取bean对应的单例实例对象
 		Object singletonObject = this.singletonObjects.get(beanName);
+		//singletonObject == null：1.单实例未创建；2.单实例创建中，发生了循环依赖
+		//什么是循环依赖
+		//A-->B   B-->A;   A-->B  B-->C   C--A
+		//单实例循环依赖情况
+		//1.构造函数依赖：无解;2.setter循环依赖：三级缓存
+
+		//三级缓存怎么解决setter造成的循环依赖
+		//例子：A-->B  B-->A  setter循环依赖
+		//1.加上spring先实例化A，首先拿到A的构造方法，通过反射创建出A的早期对象，singletonsCurrentlyInCreation中会存入A在
+		// 创建中标志，这个对象被包装成了ObjectFactory对象,放在3级缓存中
+		//2.处理A的依赖数据，检查发现，A依赖B，接下来spring会到容器中调用getBean(B.class),这里递归调用
+		//3.拿到B的构造方法，通过反射创建出B的早期对象，singletonsCurrentlyInCreation中会存入B在创建中标志，
+		// 这个对象被包装成了ObjectFactory对象,放在3级缓存中
+		//4.处理B的依赖数据，检查发现，B依赖A，接下来spring会到容器中调用getBean(A.class),这里又递归调用,获取A
+		//5.程序还会走到当前这个方法，getSingleton
+		//6.A是在创建中,singletonObject == null && isSingletonCurrentlyInCreation(beanName)的值为true
 		if (singletonObject == null && isSingletonCurrentlyInCreation(beanName)) {
+			//查询二级缓存
 			singletonObject = this.earlySingletonObjects.get(beanName);
+			//二级缓存没有，查询三级缓存
+			//为什么需要三级缓存？而不是2级缓存就够了？
+			//AOP的实现是动态代理:JDK代理，CGlib代理
+			//静态代理:目标类和代理类实现同一个接口，代理类内部维护一个目标类对象，用户使用的时候，使用代理类，代理类在调用目标方法的时候
+			//        可以在前后进行增强.代理类和目标类是2个不同的对象，对应的内存地址不一样
+			//动态代理:不需要人为写代理类，而是依靠字节码框架动态生成代理类class字节码文件，然后jvm加载，也需要去new这个代理对象，这个
+			//         代理类也是内部维护了一个目标对象，然后再调用原生对象方法前后，进行增强
+			//3级缓存在这里存在的目的是什么呢？
+			//3级缓存里面保存的是对象工厂，这个对象工厂保存了最原生对象的引用，ObjectFactory实现的实现类，getObject需要考虑一个问题，
+			//它到底返回一个原生对象，还是增强后的代理对象？
+			//getObject会判断当前这个早期实例，是否需要增强。如果需要增强，提前完成动态代理增强，返回代理对象，如果不需要，返回原生对象。
 			if (singletonObject == null && allowEarlyReference) {
 				synchronized (this.singletonObjects) {
 					// Consistent creation of early reference within full singleton lock
@@ -190,8 +223,10 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 						singletonObject = this.earlySingletonObjects.get(beanName);
 						if (singletonObject == null) {
 							ObjectFactory<?> singletonFactory = this.singletonFactories.get(beanName);
+							//3级缓存有数据
 							if (singletonFactory != null) {
 								singletonObject = singletonFactory.getObject();
+								//bean升级缓存，把3级缓存的当前bean存入2级缓存，并在3级缓存移除当前bean
 								this.earlySingletonObjects.put(beanName, singletonObject);
 								this.singletonFactories.remove(beanName);
 							}
@@ -215,7 +250,9 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 		Assert.notNull(beanName, "Bean name must not be null");
 		synchronized (this.singletonObjects) {
 			Object singletonObject = this.singletonObjects.get(beanName);
+			//缓存中没有
 			if (singletonObject == null) {
+				//容器销毁时，不能再创建实例了，直接报错
 				if (this.singletonsCurrentlyInDestruction) {
 					throw new BeanCreationNotAllowedException(beanName,
 							"Singleton bean creation not allowed while singletons of this factory are in destruction " +
@@ -224,7 +261,19 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 				if (logger.isDebugEnabled()) {
 					logger.debug("Creating shared instance of singleton bean '" + beanName + "'");
 				}
+
+				//面试经常出现，且比较难
+				//将当前要创建的单例bean实例，放入创建中的单例set集合中。放入成功：没有产生循环依赖，放入失败：产生循环依赖,抛异常
+				//构造方法依赖
+				//A-->B  B-->A
+				//1.加载A，根据A的构造方法，想要实例化A的对象，往集合中添加整在实例化A记录，接着发现A的构造方法有一个参数B==>{A}
+				//2.因为A的构造方法，有参数B，触发加载B
+				//3.加载B，根据B的构造方法，想要实例化B的对象，往集合中添加整在实例化B记录，接着发现B的构造方法有一个参数A ==>{A,B}
+				//4.因为B的构造方法，有参数A，再次触发加载A，
+				//5.载A，根据A的构造方法，想要实例化A的对象，调用beforeSingletonCreation(A),往集合中添加整在实例化A记录,
+				// 此时添加失败，发现循环依赖，抛异常
 				beforeSingletonCreation(beanName);
+
 				boolean newSingleton = false;
 				boolean recordSuppressedExceptions = (this.suppressedExceptions == null);
 				if (recordSuppressedExceptions) {
@@ -237,6 +286,7 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 				catch (IllegalStateException ex) {
 					// Has the singleton object implicitly appeared in the meantime ->
 					// if yes, proceed with it since the exception indicates that state.
+					//this.singletonObjects.get(beanName):调用传入匿名内部类的get方法
 					singletonObject = this.singletonObjects.get(beanName);
 					if (singletonObject == null) {
 						throw ex;
@@ -257,6 +307,7 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 					afterSingletonCreation(beanName);
 				}
 				if (newSingleton) {
+					//创建完成，加入到一级缓存中，移除二级缓存中的bean信息，移除三级缓存中的bean信息
 					addSingleton(beanName, singletonObject);
 				}
 			}
@@ -440,12 +491,22 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 			return isDependent(beanName, dependentBeanName, null);
 		}
 	}
-
+	//<bean class="A" depends-on="B" />
+	//<bean class="B" depends-on="A" />
+	//1.先处理A，生成一下数据
+	//以B为视角 dependentBeanMap {"B",{"A"}}
+	//以A为视角 dependenciesForBeanMap {"A",{"B"}}
+	//2.递归调用getBean(dep)，处理依赖bean
+	//3.再处理B进来本方法
+	//4.beanName:B,dependentBeanName:A
+	//5.this.dependentBeanMap.get(canonicalName) = {"A"}
+	//6.dependentBeans.contains(dependentBeanName)成立，返回true，产生了循环依赖
 	private boolean isDependent(String beanName, String dependentBeanName, @Nullable Set<String> alreadySeen) {
 		if (alreadySeen != null && alreadySeen.contains(beanName)) {
 			return false;
 		}
 		String canonicalName = canonicalName(beanName);
+
 		Set<String> dependentBeans = this.dependentBeanMap.get(canonicalName);
 		if (dependentBeans == null) {
 			return false;
@@ -453,6 +514,16 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 		if (dependentBeans.contains(dependentBeanName)) {
 			return true;
 		}
+		//环状依赖:spring无法处理，抛异常
+		//<bean class="A" depends-on="B" />
+		//<bean class="B" depends-on="C" />
+		//<bean class="C" depends-on="A" />
+		//需要好好推算:?
+		//1.假如A、B已经加载，到C
+		//2.dependentBeanMap数据：{"B",{"A"},"C",{"B"}}
+		//3.isDependent(C,A) ==>{"B"}
+		//4.isDependent(B,A) ==>{"A"}
+		//5.判断出发生了循环依赖，返回true
 		for (String transitiveDependency : dependentBeans) {
 			if (alreadySeen == null) {
 				alreadySeen = new HashSet<>();

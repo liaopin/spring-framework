@@ -61,6 +61,7 @@ public class RootBeanDefinition extends AbstractBeanDefinition {
 	private AnnotatedElement qualifiedElement;
 
 	/** Determines if the definition needs to be re-merged. */
+	/** definition合并状态标志 true:过期  false:未过期 */
 	volatile boolean stale;
 
 	boolean allowCaching = true;

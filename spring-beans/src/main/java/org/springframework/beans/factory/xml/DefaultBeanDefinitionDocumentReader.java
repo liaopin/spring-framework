@@ -92,7 +92,9 @@ public class DefaultBeanDefinitionDocumentReader implements BeanDefinitionDocume
 	 */
 	@Override
 	public void registerBeanDefinitions(Document doc, XmlReaderContext readerContext) {
+		//将上下文保存到reader中
 		this.readerContext = readerContext;
+		//解析document中   doc.getDocumentElement() ==> 拿出xml中的顶层标签  -->beans标签
 		doRegisterBeanDefinitions(doc.getDocumentElement());
 	}
 
@@ -126,15 +128,21 @@ public class DefaultBeanDefinitionDocumentReader implements BeanDefinitionDocume
 		// then ultimately reset this.delegate back to its original (parent) reference.
 		// this behavior emulates a stack of delegates without actually necessitating one.
 		BeanDefinitionParserDelegate parent = this.delegate;
+		//构建bean解析器对象
 		this.delegate = createDelegate(getReaderContext(), root, parent);
 
+		//判断文档beanNamespace是否符号默认:BEANS_NAMESPACE_URI = "http://www.springframework.org/schema/beans"
+		//一般都是符合的
 		if (this.delegate.isDefaultNamespace(root)) {
+			//获取beans上的标签属性profile:dev/prod/pre..
 			String profileSpec = root.getAttribute(PROFILE_ATTRIBUTE);
+			//说明beans标签上有profile属性，有值后
 			if (StringUtils.hasText(profileSpec)) {
 				String[] specifiedProfiles = StringUtils.tokenizeToStringArray(
 						profileSpec, BeanDefinitionParserDelegate.MULTI_VALUE_ATTRIBUTE_DELIMITERS);
 				// We cannot use Profiles.of(...) since profile expressions are not supported
 				// in XML config. See SPR-12458 for details.
+				//当前文档的profile和环境的profile不一致，不加载当前beans
 				if (!getReaderContext().getEnvironment().acceptsProfiles(specifiedProfiles)) {
 					if (logger.isDebugEnabled()) {
 						logger.debug("Skipped XML bean definition file due to specified profiles [" + profileSpec +
@@ -144,14 +152,19 @@ public class DefaultBeanDefinitionDocumentReader implements BeanDefinitionDocume
 				}
 			}
 		}
-
+		//未实现，没用用final修饰，留给子类扩展
 		preProcessXml(root);
+		//重点：解析
 		parseBeanDefinitions(root, this.delegate);
+		//未实现，没用用final修饰，留给子类扩展
 		postProcessXml(root);
 
 		this.delegate = parent;
 	}
 
+	/**
+	 * 构建bean解析器对象
+	 */
 	protected BeanDefinitionParserDelegate createDelegate(
 			XmlReaderContext readerContext, Element root, @Nullable BeanDefinitionParserDelegate parentDelegate) {
 
@@ -166,15 +179,20 @@ public class DefaultBeanDefinitionDocumentReader implements BeanDefinitionDocume
 	 * @param root the DOM root element of the document
 	 */
 	protected void parseBeanDefinitions(Element root, BeanDefinitionParserDelegate delegate) {
+		//判断默认命名空间
 		if (delegate.isDefaultNamespace(root)) {
+			//获取的是<beans></beans>标签子节点
 			NodeList nl = root.getChildNodes();
 			for (int i = 0; i < nl.getLength(); i++) {
 				Node node = nl.item(i);
 				if (node instanceof Element) {
 					Element ele = (Element) node;
+					//子标签为默认命名空间下的spring默认标签
 					if (delegate.isDefaultNamespace(ele)) {
+						//解析<bean></bean>
 						parseDefaultElement(ele, delegate);
 					}
+					//子标签为自定义标签
 					else {
 						delegate.parseCustomElement(ele);
 					}
@@ -187,16 +205,22 @@ public class DefaultBeanDefinitionDocumentReader implements BeanDefinitionDocume
 	}
 
 	private void parseDefaultElement(Element ele, BeanDefinitionParserDelegate delegate) {
+		//import标签
 		if (delegate.nodeNameEquals(ele, IMPORT_ELEMENT)) {
 			importBeanDefinitionResource(ele);
 		}
+		//alias标签
 		else if (delegate.nodeNameEquals(ele, ALIAS_ELEMENT)) {
 			processAliasRegistration(ele);
 		}
+		//bean标签
 		else if (delegate.nodeNameEquals(ele, BEAN_ELEMENT)) {
+			//bean标签解析
 			processBeanDefinition(ele, delegate);
 		}
+		//嵌套子beans标签
 		else if (delegate.nodeNameEquals(ele, NESTED_BEANS_ELEMENT)) {
+			//迭代解析子beans标签
 			// recurse
 			doRegisterBeanDefinitions(ele);
 		}
@@ -303,11 +327,14 @@ public class DefaultBeanDefinitionDocumentReader implements BeanDefinitionDocume
 	 * and registering it with the registry.
 	 */
 	protected void processBeanDefinition(Element ele, BeanDefinitionParserDelegate delegate) {
+		//BeanDefinitionHolder主要保存了bean标签上的别名信息
 		BeanDefinitionHolder bdHolder = delegate.parseBeanDefinitionElement(ele);
 		if (bdHolder != null) {
+			//如果BeanDefinition需要装饰的话，这里需要处理，主要处理自定义属性
 			bdHolder = delegate.decorateBeanDefinitionIfRequired(ele, bdHolder);
 			try {
 				// Register the final decorated instance.
+				//注册bean到容器中
 				BeanDefinitionReaderUtils.registerBeanDefinition(bdHolder, getReaderContext().getRegistry());
 			}
 			catch (BeanDefinitionStoreException ex) {
@@ -315,6 +342,7 @@ public class DefaultBeanDefinitionDocumentReader implements BeanDefinitionDocume
 						bdHolder.getBeanName() + "'", ele, ex);
 			}
 			// Send registration event.
+			//发送beanDefination注册事件
 			getReaderContext().fireComponentRegistered(new BeanComponentDefinition(bdHolder));
 		}
 	}
